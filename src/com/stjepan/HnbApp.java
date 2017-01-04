@@ -442,7 +442,7 @@ public class HnbApp {
         outStream.close();
         String newFileName = "exchange_currency.json";
 
-        File tempFile1 = unZip(targetFile, true, newFileName);
+        File jsonFile = unZip(targetFile, true, newFileName);
 
         Gson gson = new Gson();
         JsonReader reader = new JsonReader((new FileReader(newFileName)));
@@ -455,6 +455,9 @@ public class HnbApp {
             CurrencyInfo element = data[i];
             parsedData.addCurrencyInfo(element);
         }
+
+        // delete JSON file
+        jsonFile.deleteOnExit();
 
         return parsedData;
 
