@@ -1,0 +1,2 @@
+excel_filename=Tečajevi.xlsx
+decimals_num = 2
