@@ -3,15 +3,18 @@ package com.stjepan;
 import java.io.*;
 import java.math.BigDecimal;
 import java.nio.channels.FileChannel;
+import java.nio.charset.Charset;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.Properties;
 import java.util.zip.*;
 
 import com.google.gson.Gson;
 import com.google.gson.stream.JsonReader;
+import com.sun.xml.internal.stream.buffer.sax.*;
 import org.apache.http.HttpResponse;
 import org.apache.http.NameValuePair;
 import org.apache.http.client.HttpClient;
@@ -34,32 +37,45 @@ import static org.apache.poi.ss.usermodel.CellType.*;
 public class HnbApp {
 
     private final String USER_AGENT = "Mozilla/5.0";
-    private static final String EXCEL_FILENAME = "Tečajevi.xlsx";
+    private static final String CONFIG_FILENAME = "config.txt";
     private static final long DAY_IN_MS = 86400000;
-    private static final int FLOAT_DECIMALS = 6;
-
-    // offsets inside data array
-    private static final int GBP_OFFSET = 0;
-    private static final int USD_OFFSET = 1;
-    private static final int EUR_OFFSET = 2;
 
     private static final boolean MAKE_COPY = true;
 
-    public static void main(String[] args) throws Exception {
-
+    public static void main(String[] args) {
         TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+        ConfigInfo configInfo = null;
         HnbApp hnbApp = new HnbApp();
         ExcelFileInfo fileInfo = new ExcelFileInfo();
         CurrencyParser parsedData;
         boolean deleteCopy = true;
-        File copyFile = new File(EXCEL_FILENAME + ".backup");
 
-        copyFile(new File(EXCEL_FILENAME), copyFile);
+        try
+        {
+            configInfo = hnbApp.parseConfigFile(CONFIG_FILENAME);
+        }
+        catch (IOException ex)
+        {
+            System.out.println("Problem while parsing config file : " + ex.getMessage());
+            return;
+        }
+
+        File copyFile = new File(configInfo.getExcelFilename() + ".backup");
+
+        try
+        {
+            copyFile(new File(configInfo.getExcelFilename()), copyFile);
+        }
+        catch (IOException ex)
+        {
+            System.out.println("Problem creating backup : " + ex.getMessage());
+            return;
+        }
 
         System.out.println("Reading last date from Excel file...");
         try
         {
-            fileInfo = hnbApp.readLastDateFromExcelFile(EXCEL_FILENAME);
+            fileInfo = hnbApp.readLastDateFromExcelFile(configInfo.getExcelFilename());
         }
         catch (IOException ex)
         {
@@ -71,7 +87,16 @@ public class HnbApp {
 
 
 
-        parsedData = hnbApp.sendPost(fileInfo);
+        try
+        {
+            parsedData = hnbApp.sendPost(fileInfo);
+        }
+        catch (Exception ex)
+        {
+            System.out.println("Problem getting the currency data from the web : " + ex.getMessage());
+            return;
+        }
+
 
         // TODO : Prepare header and data
         // TODO : Send the request
@@ -81,7 +106,7 @@ public class HnbApp {
         System.out.println("Filling Excel data...");
         try
         {
-            hnbApp.fillExcelData(fileInfo, parsedData);
+            hnbApp.fillExcelData(configInfo, fileInfo, parsedData);
         }
         catch (IOException ex)
         {
@@ -93,6 +118,21 @@ public class HnbApp {
         {
             copyFile.delete();
         }
+
+    }
+
+    private ConfigInfo parseConfigFile(String configFilename) throws IOException
+    {
+        ConfigInfo configInfo = new ConfigInfo();
+        Properties prop = new Properties();
+        InputStream inputStream = new FileInputStream(configFilename);
+
+        prop.load(new InputStreamReader(inputStream, Charset.forName("UTF-8")));
+
+        configInfo.setExcelFilename(prop.getProperty("excel_filename", ConfigInfo.DEFAULT_EXXCEL_FILENAME));
+        configInfo.setFloatDecimals(Integer.parseInt(prop.getProperty("decimals_num", Integer.toString(ConfigInfo.DEFAULT_FLOAT_DECIMALS))));
+
+        return configInfo;
 
     }
 
@@ -143,6 +183,28 @@ public class HnbApp {
             lastRow = nextRow;
         }
 
+        // get cell iterator for last row
+        Iterator<Cell> cellIterator = lastRow.cellIterator();
+
+        // Setting the style for date and data cells
+        while (cellIterator.hasNext())
+        {
+            Cell lastRowCell = cellIterator.next();
+            CellStyle cellStyle = null;
+
+            // get date style
+            if (DateUtil.isCellDateFormatted((lastRowCell)))
+            {
+                cellStyle = lastRowCell.getCellStyle();
+                fileInfo.setCellDateStyle(cellStyle);
+            }
+            else
+            {
+                cellStyle = lastRowCell.getCellStyle();
+                fileInfo.setCellDataStyle(cellStyle);
+            }
+        }
+
         // This is for the last row, get the first cell. Should be date
         cell = lastRow.getCell(lastRow.getFirstCellNum());
 
@@ -153,9 +215,9 @@ public class HnbApp {
         return fileInfo;
     }
 
-    private void fillExcelData(ExcelFileInfo fileInfo, CurrencyParser data) throws IOException
+    private void fillExcelData(ConfigInfo configInfo, ExcelFileInfo fileInfo, CurrencyParser data) throws IOException
     {
-        FileInputStream excelFileStream = new FileInputStream(new File(EXCEL_FILENAME));
+        FileInputStream excelFileStream = new FileInputStream(new File(configInfo.getExcelFilename()));
         Workbook workbook = new XSSFWorkbook(excelFileStream);
         Sheet firstSheet = workbook.getSheetAt(0);
 
@@ -204,8 +266,13 @@ public class HnbApp {
 
             //binds the style you need to the cell.
             CellStyle dateCellStyle = workbook.createCellStyle();
+            CellStyle dataCellStyle = workbook.createCellStyle();
+            /* replaced by info from the workbook
             short df = workbook.createDataFormat().getFormat("dd.mm.yyyy");
             dateCellStyle.setDataFormat(df);
+            */
+            dateCellStyle.cloneStyleFrom(fileInfo.getCellDateStyle());
+            dataCellStyle.cloneStyleFrom(fileInfo.getCellDataStyle());
 
             List<CurrencyInfo> gbpList = data.getCurrencyData("GBP");
             List<CurrencyInfo> usdList = data.getCurrencyData("USD");
@@ -233,9 +300,14 @@ public class HnbApp {
                 usdCellDate.setCellValue(newDate);
                 usdCellDate.setCellStyle(dateCellStyle);
 
-                usdCellBuy.setCellValue(new BigDecimal(usdList.get(i).buyExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
-                usdCellAverage.setCellValue(new BigDecimal(usdList.get(i).averageExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
-                usdCellSell.setCellValue(new BigDecimal(usdList.get(i).sellExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
+                usdCellBuy.setCellValue(new BigDecimal(usdList.get(i).buyExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                usdCellBuy.setCellStyle(dataCellStyle);
+
+                usdCellAverage.setCellValue(new BigDecimal(usdList.get(i).averageExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                usdCellAverage.setCellStyle(dataCellStyle);
+
+                usdCellSell.setCellValue(new BigDecimal(usdList.get(i).sellExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                usdCellSell.setCellStyle(dataCellStyle);
 
                 // EUR
                 Cell eurCellDate = newRow.createCell(eurPos);
@@ -246,9 +318,14 @@ public class HnbApp {
                 eurCellDate.setCellStyle(dateCellStyle);
 
                 //String correctFloatString =  data[counter -1].buyExchangeRate.replace(',','.');
-                eurCellBuy.setCellValue(new BigDecimal(eurList.get(i).buyExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
-                eurCellAverage.setCellValue(new BigDecimal(eurList.get(i).averageExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
-                eurCellSell.setCellValue(new BigDecimal(eurList.get(i).sellExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
+                eurCellBuy.setCellValue(new BigDecimal(eurList.get(i).buyExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                eurCellBuy.setCellStyle(dataCellStyle);
+
+                eurCellAverage.setCellValue(new BigDecimal(eurList.get(i).averageExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                eurCellAverage.setCellStyle(dataCellStyle);
+
+                eurCellSell.setCellValue(new BigDecimal(eurList.get(i).sellExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                eurCellSell.setCellStyle(dataCellStyle);
 
 
                 // GBP
@@ -259,9 +336,14 @@ public class HnbApp {
                 gbpCellDate.setCellValue(newDate);
                 gbpCellDate.setCellStyle(dateCellStyle);
 
-                gbpCellBuy.setCellValue(new BigDecimal(gbpList.get(i).buyExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
-                gbpCellAverage.setCellValue(new BigDecimal(gbpList.get(i).averageExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
-                gbpCellSell.setCellValue(new BigDecimal(gbpList.get(i).sellExchangeRate.replace(',','.')).setScale(FLOAT_DECIMALS).floatValue());
+                gbpCellBuy.setCellValue(new BigDecimal(gbpList.get(i).buyExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                gbpCellBuy.setCellStyle(dataCellStyle);
+
+                gbpCellAverage.setCellValue(new BigDecimal(gbpList.get(i).averageExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                gbpCellAverage.setCellStyle(dataCellStyle);
+
+                gbpCellSell.setCellValue(new BigDecimal(gbpList.get(i).sellExchangeRate.replace(',','.')).setScale(configInfo.getFloatDecimals(), BigDecimal.ROUND_HALF_UP).floatValue());
+                gbpCellSell.setCellStyle(dataCellStyle);
             }
 
         }
@@ -272,7 +354,7 @@ public class HnbApp {
 
         excelFileStream.close();
 
-        FileOutputStream outFile =new FileOutputStream(new File(EXCEL_FILENAME));
+        FileOutputStream outFile = new FileOutputStream(new File(configInfo.getExcelFilename()));
         workbook.write(outFile);
         outFile.close();
 
@@ -306,7 +388,7 @@ public class HnbApp {
         urlParameters.add(new BasicNameValuePair("_tecajnalistacontroller_WAR_hnbtecajnalistaportlet_dateToMax", ""));
         urlParameters.add(new BasicNameValuePair("_tecajnalistacontroller_WAR_hnbtecajnalistaportlet_yearMin", ""));
         urlParameters.add(new BasicNameValuePair("_tecajnalistacontroller_WAR_hnbtecajnalistaportlet_yearMax", ""));
-        urlParameters.add(new BasicNameValuePair("_tecajnalistacontroller_WAR_hnbtecajnalistaportlet_dateMaxDatePicker", "16.12.2016"));
+        urlParameters.add(new BasicNameValuePair("_tecajnalistacontroller_WAR_hnbtecajnalistaportlet_dateMaxDatePicker", DateTimeFormatter.ofPattern("dd.MM.yyyy").format(localDate)));
         urlParameters.add(new BasicNameValuePair("_tecajnalistacontroller_WAR_hnbtecajnalistaportlet_vrstaReport", "1"));
         urlParameters.add(new BasicNameValuePair("year", "-1"));
         urlParameters.add(new BasicNameValuePair("yearLast", "-1"));
