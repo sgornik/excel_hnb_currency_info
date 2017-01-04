@@ -1,5 +1,7 @@
 package com.stjepan;
 
+import org.apache.poi.ss.usermodel.CellStyle;
+
 import java.text.SimpleDateFormat;
 import java.util.*;
 
@@ -10,11 +12,36 @@ public class ExcelFileInfo {
                 // ID   Column position
     private Map<String, Integer> currencies = null;
     private Date lastDate;
+    private CellStyle cellDateStyle = null;
+    private CellStyle cellDataStyle = null;
     private static long DAY_IN_MS = 86400000;
+
+    public CellStyle getCellDateStyle() {
+        return cellDateStyle;
+    }
+
+    public void setCellDateStyle(CellStyle cellDateStyle) {
+        if (null == this.cellDateStyle)
+        {
+            this.cellDateStyle = cellDateStyle;
+        }
+    }
+
+    public CellStyle getCellDataStyle() {
+        return cellDataStyle;
+    }
+
+    public void setCellDataStyle(CellStyle cellDataStyle) {
+        if (null == this.cellDataStyle)
+        {
+            this.cellDataStyle = cellDataStyle;
+        }
+    }
 
     ExcelFileInfo()
     {
         currencies = new HashMap<String, Integer>();
+
     }
 
     public Date getLastDate()
